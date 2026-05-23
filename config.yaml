@@ -1,0 +1,81 @@
+# =====================================================================
+# Soft-SAD configuration.
+# =====================================================================
+
+data:
+  root: "data/toy_data"                # directory containing wavs/, annotations/, *.csv
+  sample_rate: 16000
+  feature_cache: "data/toy_data/features/"  # *.npz files cached here after prepare
+
+features:
+  # Matches the paper: 32 ms / 16 ms frames at 16 kHz with 13 MFCC.
+  n_fft: 1024
+  hop_length: 512
+  n_mels: 13
+  n_mfcc: 13
+  fmin: 20
+  fmax: 8000
+
+model:
+  hidden_size: 5         # paper uses 5 for TinyML target; 8-16 are also fine
+  num_layers: 1
+  bidirectional: false   # streaming-friendly
+  dropout: 0.0
+
+training:
+  batch_size: 32
+  num_epochs: 30
+  learning_rate: 1.0e-3
+  weight_decay: 0.0
+  grad_clip: 1.0
+  # Sample weights per frame label (paper Sec. V-B)
+  weight_speech: 1.0
+  weight_nonspeech: 1.0
+  weight_silence: 0.5
+  # Curriculum-style noise augmentation. None = off.
+  noise_snr_db: null
+  num_workers: 4
+  seed: 0
+  log_every: 50          # iterations
+  out_dir: "runs/"
+  early_stop_patience: 5
+
+# How a per-frame probability stream is turned into discrete events.
+events:
+  # An event is a rising edge of the thresholded prediction. To suppress
+  # chattering near the threshold, ignore rising edges that occur fewer
+  # than `min_gap_frames` after the previous one.
+  min_gap_frames: 3
+  # Optionally smooth the probability stream with a centred boxcar before
+  # thresholding (set 1 to disable).
+  smoothing_frames: 1
+
+# Hyper-parameters of the soft / hard evaluation rules.
+metrics:
+  # Frame-rate quantities are converted from milliseconds at run time
+  # using the configured hop_length / sample_rate.
+  # Membership function breakpoints (see Eq. 4 of the paper), relative
+  # to the event in milliseconds:
+  t1_ms: -240           # start of anticipation ramp (-15 frames @ 16ms hop)
+  t2_ms: -80            # end of ramp / start of plateau (-5 frames)
+  t3_ms:  80            # end of plateau / start of decay  (+5 frames)
+  t4_ms:  400           # end of decay tail / 0 score      (+25 frames)
+  K_ms:  1600           # support half-width (+/-100 frames)
+  steepness: 2.0        # 's' parameter; ~ decades of decay over the tail
+
+  # Threshold sweep for F1-vs-tau and ROC.
+  threshold_grid: 51    # 0, 0.02, ..., 1.0
+
+  # If true, the non-speech class uses a rectangular membership covering
+  # the entire annotated extent of each non-speech event (rigorous mode,
+  # Sec. IV-E of the paper). If false, both classes use the piecewise
+  # function above.
+  rigorous_nonspeech: true
+
+  # If true, plot hard metrics alongside soft as a sanity check.
+  also_compute_hard: true
+
+  # Collar (one-sided) for the hard event metric, in milliseconds. The
+  # paper's design choice is to set this equal to the soft plateau:
+  # i.e. `collar = (t3 - t2) / 2`. Set null to use that default.
+  hard_collar_ms: null
