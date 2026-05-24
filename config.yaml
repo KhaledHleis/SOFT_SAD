@@ -3,9 +3,9 @@
 # =====================================================================
 
 data:
-  root: "data/toy_data"                # directory containing wavs/, annotations/, *.csv
+  root: "data/Transformed_DataSet"                # directory containing wavs/, annotations/, *.csv
   sample_rate: 16000
-  feature_cache: "data/toy_data/features/"  # *.npz files cached here after prepare
+  feature_cache: "data/Transformed_DataSet/features/"  # *.npz files cached here after prepare
 
 features:
   # Matches the paper: 32 ms / 16 ms frames at 16 kHz with 13 MFCC.
@@ -23,6 +23,7 @@ model:
   dropout: 0.0
 
 training:
+  per_train: 0.7 #percentage of the training data from the data 
   batch_size: 32
   num_epochs: 30
   learning_rate: 1.0e-3
