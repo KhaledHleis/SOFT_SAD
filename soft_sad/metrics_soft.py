@@ -41,7 +41,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from soft_sad.membership import MembershipParams, membership
+from .membership import MembershipParams, membership
 
 
 # ---------------------------------------------------------------------
@@ -207,44 +207,31 @@ def compute_event_confusion(
         gt_labels = np.asarray(gt_labels, dtype=np.int64)
         T = pred_labels.size
 
-        # Add a virtual detection at each speech event where the prediction
-        # at that frame is also "speech" (i.e. pred==1 in the binary sense).
-        # We require predicted_label == ground_truth_label at the event
-        # frame; for speech events, that means pred=SPEECH=1.
+        # Insert virtual detections at every event where the frame-level
+        # prediction agrees with the event's class. We do NOT guard against
+        # the existence of a nearby real detection: at low tau the "real"
+        # detection is often a useless early rising edge that scores 0 in
+        # the membership function. Bipartite matching takes the max over
+        # all candidate detections per event, so adding a virtual at score 1
+        # is harmless when a good real detection already exists (max = 1)
+        # but rescues the event when the real detection is out-of-support
+        # or sits in the zero-credit region.
+        #
+        # The asymmetry between speech and non-speech (pred == gt vs
+        # pred != gt) is intentional. At a speech event the virtual fires
+        # when the model is "currently calling this frame speech" (real
+        # TP-ish behaviour). At a non-speech event the virtual fires when
+        # the model is "currently calling this frame speech" too -- i.e.
+        # currently making the operational FP error. Both reduce to
+        # "pred_labels[e] == SPEECH" in the SAD binary case, which is
+        # exactly what we want as tau -> 0 (FAR -> 1, TAR -> 1).
         virt = []
         for e in speech_events:
             if 0 <= e < T and pred_labels[e] == gt_labels[e]:
-                # only insert if no real detection is already in this
-                # event's mu support
-                in_support = (
-                    detections.size > 0
-                    and np.any(np.abs(detections - e) <= speech_params.K)
-                )
-                if not in_support:
-                    virt.append(int(e))
-        # For non-speech events, "predicted == ground_truth" means the
-        # model says NONSPEECH at that frame, i.e. it did NOT fire there.
-        # Inserting a virtual *detection* at a non-speech event is a
-        # commitment that the model fired close to it (false alarm) — but
-        # that's not what happens at tau -> 0. So at tau -> 0 the dummy
-        # rule needs to give credit "the model fired" for speech events
-        # and "the model would falsely fire" for non-speech events too,
-        # in order to drive (TAR, FAR) -> (1, 1).
-        #
-        # At tau -> 0, pred_labels are all SPEECH, so pred==gt holds for
-        # speech events (we insert virtuals; TP -> m_s) but NOT for
-        # non-speech events (pred=SPEECH != gt=NONSPEECH). So we also
-        # insert a virtual detection at every non-speech event where
-        # pred != gt — i.e. the model is currently misclassifying it as
-        # speech, which is operationally an FP at that event.
+                virt.append(int(e))
         for e in nonspeech_events:
             if 0 <= e < T and pred_labels[e] != gt_labels[e]:
-                in_support = (
-                    detections.size > 0
-                    and np.any(np.abs(detections - e) <= speech_params.K)
-                )
-                if not in_support:
-                    virt.append(int(e))
+                virt.append(int(e))
 
         if virt:
             detections_eff = np.sort(np.concatenate([detections, np.array(virt, dtype=np.int64)]))

@@ -26,7 +26,6 @@ from . import NONSPEECH, SILENCE, SPEECH
 from soft_sad.data import FeatureDataset, collate_pad
 from soft_sad.model import SADGRU
 
-
 def set_seed(seed: int):
     random.seed(seed); np.random.seed(seed); torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
@@ -193,4 +192,8 @@ def main():
 
 
 if __name__ == "__main__":
+    print(torch.cuda.is_available())        # True if GPU is available
+    print(torch.version.cuda)  # probably prints None
+    print(torch.cuda.get_device_name(0))    # GPU name
+    print(torch.cuda.device_count())        # Number of GPUs
     main()

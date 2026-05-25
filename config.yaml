@@ -11,14 +11,14 @@ features:
   # Matches the paper: 32 ms / 16 ms frames at 16 kHz with 13 MFCC.
   n_fft: 1024
   hop_length: 512
-  n_mels: 13
+  n_mels: 24
   n_mfcc: 13
   fmin: 20
   fmax: 8000
 
 model:
-  hidden_size: 5         # paper uses 5 for TinyML target; 8-16 are also fine
-  num_layers: 1
+  hidden_size: 10         # paper uses 5 for TinyML target; 8-16 are also fine
+  num_layers: 2
   bidirectional: false   # streaming-friendly
   dropout: 0.0
 

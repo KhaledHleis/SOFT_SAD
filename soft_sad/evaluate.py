@@ -112,6 +112,8 @@ def sweep(
                     nonspeech_events=gt["nonspeech"],
                     nonspeech_intervals=gt["nonspeech_intervals"],
                     collar_frames=hard_collar_frames,
+                    pred_labels=pred_labels,
+                    gt_labels=gt_labels
                 )
                 hard_per_utt.append(hard)
 
@@ -168,6 +170,8 @@ def per_category_accuracy(
             nonspeech_events=gt["nonspeech"],
             nonspeech_intervals=gt["nonspeech_intervals"],
             collar_frames=hard_collar_frames,
+            pred_labels=pred_labels,
+            gt_labels=labels,
         )
 
         for (ev_frame, score_soft, _), is_speech in zip(soft["match_speech"], [True] * len(soft["match_speech"])):

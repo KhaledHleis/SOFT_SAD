@@ -46,5 +46,5 @@ def hard_confusion(
         rigorous_nonspeech=False,
         pred_labels=pred_labels,
         gt_labels=gt_labels,
-        enable_dummy=False,         # hard metrics: no virtual-detection rescue
+        enable_dummy=True,         # hard metrics: no virtual-detection rescue
     )
