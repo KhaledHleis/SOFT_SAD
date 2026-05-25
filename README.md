@@ -7,7 +7,7 @@ The code does five things:
 
 1. Loads audio + interval-style annotations into per-frame labels (speech /
    non-speech / silence).
-2. Extracts 13-dim MFCC features with the parameters used in the paper.
+2. Extracts 13-dim MFCC features.
 3. Trains a small GRU classifier (5–16 hidden units) with class-weighted BCE.
 4. Runs inference and turns the per-frame speech probability into a set of
    detection events (rising edges of the thresholded stream).
@@ -58,20 +58,19 @@ python -m soft_sad.train --config config.yaml
 python -m soft_sad.evaluate --config config.yaml --checkpoint runs/best.pt
 ```
 
-All hyper-parameters live in `config.yaml`. Sensible defaults match the
-paper's experimental protocol.
+All hyper-parameters live in `config.yaml`. 
 
 ## Code layout
 
 | file | purpose |
 |---|---|
 | `soft_sad/data.py`      | dataset loader, annotation → per-frame labels |
-| `soft_sad/features.py`  | MFCC extraction (matches paper) |
+| `soft_sad/features.py`  | MFCC extraction |
 | `soft_sad/model.py`     | tiny GRU classifier |
 | `soft_sad/events.py`    | rising-edge detection from probability stream |
-| `soft_sad/membership.py`| piecewise membership $\mu(t)$ from Eq. 4 of the paper |
-| `soft_sad/metrics_hard.py` | hard event metrics (rectangular collar) |
-| `soft_sad/metrics_soft.py` | Soft-SAD metrics (Eq. 3, dummy-classifier fallback) |
+| `soft_sad/membership.py`| piecewise membership $\mu(t)$ |
+| `soft_sad/metrics_hard.py` | hard event metrics|
+| `soft_sad/metrics_soft.py` | Soft-SAD metrics |
 | `soft_sad/prepare.py`   | feature extraction CLI |
 | `soft_sad/train.py`     | training CLI |
 | `soft_sad/evaluate.py`  | evaluation + plots CLI |
