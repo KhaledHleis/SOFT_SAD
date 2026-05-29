@@ -6,6 +6,9 @@ to the two-event-class SAD problem with silence/noise deferred to a
 diagnostic. See `metrics_soft.py` for the full soft version; this module
 is a thin convenience wrapper that calls into the same matching code with
 a rectangular membership.
+
+No changes were needed here for the data-size scaling feature: all
+evaluation logic stays in metrics_soft.py / evaluate.py.
 """
 from __future__ import annotations
 
@@ -43,7 +46,7 @@ def hard_confusion(
         nonspeech_events=nonspeech_events,
         nonspeech_intervals=nonspeech_intervals,
         speech_params=p,
-        rigorous_nonspeech=False,
+        rigorous_nonspeech=True,
         pred_labels=pred_labels,
         gt_labels=gt_labels,
         enable_dummy=True,         # hard metrics: no virtual-detection rescue

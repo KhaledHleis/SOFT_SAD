@@ -3,9 +3,9 @@
 # =====================================================================
 
 data:
-  root: "data/Transformed_DataSet"                # directory containing wavs/, annotations/, *.csv
+  root: "data/Test_dataset"                # directory containing wavs/, annotations/, *.csv
   sample_rate: 16000
-  feature_cache: "data/Transformed_DataSet/features/"  # *.npz files cached here after prepare
+  feature_cache: "data/Test_dataset/features/"  # *.npz files cached here after prepare
 
 features:
   # Matches the paper: 32 ms / 16 ms frames at 16 kHz with 13 MFCC.
@@ -80,3 +80,7 @@ metrics:
   # paper's design choice is to set this equal to the soft plateau:
   # i.e. `collar = (t3 - t2) / 2`. Set null to use that default.
   hard_collar_ms: null
+
+  datasize_step:   1000   # default
+  datasize_n_boot: 0      # set to e.g. 50 for confidence bands
+  datasize_seed:   42

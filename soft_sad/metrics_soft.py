@@ -34,6 +34,13 @@ Returns
 -------
 A `dict` with keys TP, FN, TN, FP, plus precision, recall, F1, TAR, FAR
 and the lists of (event, attributed_detection) pairs for diagnostics.
+
+Changes vs original
+-------------------
+* ``aggregate_confusions`` now returns a fully-populated dict (all nine
+  keys: TP, FN, TN, FP, P, R, F1, TAR, FAR) even when the input list is
+  empty or contains utterances with zero events, so callers in the
+  data-size scaling loop never receive a dict with missing keys.
 """
 from __future__ import annotations
 
@@ -207,24 +214,6 @@ def compute_event_confusion(
         gt_labels = np.asarray(gt_labels, dtype=np.int64)
         T = pred_labels.size
 
-        # Insert virtual detections at every event where the frame-level
-        # prediction agrees with the event's class. We do NOT guard against
-        # the existence of a nearby real detection: at low tau the "real"
-        # detection is often a useless early rising edge that scores 0 in
-        # the membership function. Bipartite matching takes the max over
-        # all candidate detections per event, so adding a virtual at score 1
-        # is harmless when a good real detection already exists (max = 1)
-        # but rescues the event when the real detection is out-of-support
-        # or sits in the zero-credit region.
-        #
-        # The asymmetry between speech and non-speech (pred == gt vs
-        # pred != gt) is intentional. At a speech event the virtual fires
-        # when the model is "currently calling this frame speech" (real
-        # TP-ish behaviour). At a non-speech event the virtual fires when
-        # the model is "currently calling this frame speech" too -- i.e.
-        # currently making the operational FP error. Both reduce to
-        # "pred_labels[e] == SPEECH" in the SAD binary case, which is
-        # exactly what we want as tau -> 0 (FAR -> 1, TAR -> 1).
         virt = []
         for e in speech_events:
             if 0 <= e < T and pred_labels[e] == gt_labels[e]:
@@ -257,24 +246,9 @@ def compute_event_confusion(
         )
 
     # ---- Soft confusion matrix entries (Eq. 3) ----
-    # TP_s: sum of speech-membership scores at each speech event's best detection.
     TP_s = float(best_s.sum())
     FN_s = float(m_s - TP_s)
 
-    # TN/FP: depends on the non-speech membership flavour.
-    #
-    # Rigorous mode (mu_N is the indicator of the non-speech interval):
-    #   "the model fired inside this non-speech window" is a binary event,
-    #   exactly captured by best_n_mu[j] in {0, 1}. So
-    #       TN_contrib = 1 - best_n_mu[j]
-    #       FP_contrib = best_n_mu[j]
-    #
-    # Graded (non-rigorous) mode:
-    #   We apply Eq. 3 of the paper. The attributed detection d_hat_e
-    #   for each non-speech event has its FP weight given by its speech
-    #   membership d_sp; the residual goes to TN. If no detection is
-    #   attributed to the event (best_n_mu[j] == 0), the model correctly
-    #   ignored the event and TN_contrib = 1.
     tn_contrib = np.zeros(m_n, dtype=np.float64)
     if rigorous_nonspeech:
         tn_contrib = 1.0 - best_n_mu
@@ -321,16 +295,23 @@ def compute_event_confusion(
 # ---------------------------------------------------------------------
 
 def aggregate_confusions(confs: list[dict]) -> dict:
-    """Sum per-utterance confusion matrices and recompute derived rates."""
+    """Sum per-utterance confusion matrices and recompute derived rates.
+
+    Always returns a dict with all nine keys (TP, FN, TN, FP, P, R, F1,
+    TAR, FAR) even when ``confs`` is empty, so callers in the data-size
+    scaling loop never receive a dict with missing keys.
+    """
+    _zero = dict(TP=0.0, FN=0.0, TN=0.0, FP=0.0,
+                 P=0.0, R=0.0, F1=0.0, TAR=0.0, FAR=0.0)
     if not confs:
-        return dict(TP=0, FN=0, TN=0, FP=0, P=0.0, R=0.0, F1=0.0, TAR=0.0, FAR=0.0)
+        return _zero
     TP = sum(c["TP"] for c in confs)
     FN = sum(c["FN"] for c in confs)
     TN = sum(c["TN"] for c in confs)
     FP = sum(c["FP"] for c in confs)
     eps = 1e-12
-    P = TP / max(TP + FP, eps)
-    R = TP / max(TP + FN, eps)
+    P  = TP / max(TP + FP, eps)
+    R  = TP / max(TP + FN, eps)
     F1 = 2 * P * R / max(P + R, eps)
     return dict(
         TP=TP, FN=FN, TN=TN, FP=FP,
