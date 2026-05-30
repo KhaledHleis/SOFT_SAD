@@ -17,10 +17,10 @@ features:
   fmax: 8000
 
 model:
-  hidden_size: 10         # paper uses 5 for TinyML target; 8-16 are also fine
+  hidden_size: 5         # paper uses 5 for TinyML target; 8-16 are also fine
   num_layers: 2
-  bidirectional: false   # streaming-friendly
-  dropout: 0.0
+  bidirectional: True   # streaming-friendly
+  dropout: 0.1
 
 training:
   per_train: 0.7 #percentage of the training data from the data 
@@ -81,6 +81,6 @@ metrics:
   # i.e. `collar = (t3 - t2) / 2`. Set null to use that default.
   hard_collar_ms: null
 
-  datasize_step:   1000   # default
-  datasize_n_boot: 0      # set to e.g. 50 for confidence bands
+  datasize_step:   100   # default
+  datasize_n_boot: 50      # set to e.g. 50 for confidence bands
   datasize_seed:   42
