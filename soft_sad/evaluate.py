@@ -77,6 +77,7 @@ def _eval_one_utterance(
     speech_params: MembershipParams,
     hard_collar_frames: int,
     tau: float,
+    enable_dummy: bool = True,
 ) -> tuple[dict, dict]:
     """Return (soft_conf, hard_conf) for a single utterance at threshold tau."""
     prob   = u["prob"]
@@ -98,7 +99,7 @@ def _eval_one_utterance(
         rigorous_nonspeech=bool(cfg["metrics"]["rigorous_nonspeech"]),
         pred_labels=pred_labels,
         gt_labels=labels,
-        enable_dummy=True,
+        enable_dummy=enable_dummy,
     )
     hard = hard_confusion(
         detections=det,
@@ -108,6 +109,7 @@ def _eval_one_utterance(
         collar_frames=hard_collar_frames,
         pred_labels=pred_labels,
         gt_labels=labels,
+        enable_dummy=enable_dummy,
     )
     return soft, hard
 
@@ -124,13 +126,14 @@ def sweep(
     thresholds: np.ndarray,
 ) -> dict:
     """For each threshold, aggregate hard + soft confusion matrices across all utts."""
+    enable_dummy = bool(cfg["metrics"].get("enable_dummy", True))
     soft_by_tau = []
     hard_by_tau = []
     for tau in thresholds:
         soft_per_utt = []
         hard_per_utt = []
         for u in predictions:
-            soft, hard = _eval_one_utterance(u, cfg, speech_params, hard_collar_frames, tau)
+            soft, hard = _eval_one_utterance(u, cfg, speech_params, hard_collar_frames, tau, enable_dummy=enable_dummy)
             soft_per_utt.append(soft)
             if cfg["metrics"]["also_compute_hard"]:
                 hard_per_utt.append(hard)
@@ -158,11 +161,12 @@ def per_category_accuracy(
     Untyped non-speech events fall into category 'nonspeech'; untyped speech
     events into 'speech'.
     """
+    enable_dummy = bool(cfg["metrics"].get("enable_dummy", True))
     per_cat = defaultdict(lambda: {"soft_TP": 0.0, "hard_TP": 0, "n": 0})
 
     for u in predictions:
         cats = u["categories"]
-        soft, hard = _eval_one_utterance(u, cfg, speech_params, hard_collar_frames, tau)
+        soft, hard = _eval_one_utterance(u, cfg, speech_params, hard_collar_frames, tau, enable_dummy=enable_dummy)
 
         for (ev_frame, score_soft, _) in soft["match_speech"]:
             cat = cats[ev_frame] if 0 <= ev_frame < len(cats) and cats[ev_frame] else "speech"
@@ -205,9 +209,10 @@ def _aggregate_subset(
     tau: float,
 ) -> tuple[dict, dict]:
     """Aggregate soft and hard confusions over a subset at fixed tau."""
+    enable_dummy = bool(cfg["metrics"].get("enable_dummy", True))
     soft_confs, hard_confs = [], []
     for u in subset:
-        s, h = _eval_one_utterance(u, cfg, speech_params, hard_collar_frames, tau)
+        s, h = _eval_one_utterance(u, cfg, speech_params, hard_collar_frames, tau, enable_dummy=enable_dummy)
         soft_confs.append(s)
         hard_confs.append(h)
     return aggregate_confusions(soft_confs), aggregate_confusions(hard_confs)

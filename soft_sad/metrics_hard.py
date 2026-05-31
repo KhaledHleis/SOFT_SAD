@@ -27,6 +27,7 @@ def hard_confusion(
     collar_frames: int,
     pred_labels: np.ndarray | None = None,
     gt_labels: np.ndarray | None = None,
+    enable_dummy: bool = True
 ) -> dict:
     """Hard event-based confusion matrix using a rectangular collar.
 
@@ -49,5 +50,5 @@ def hard_confusion(
         rigorous_nonspeech=True,
         pred_labels=pred_labels,
         gt_labels=gt_labels,
-        enable_dummy=True,         # hard metrics: no virtual-detection rescue
+        enable_dummy=enable_dummy,         # hard metrics: no virtual-detection rescue
     )
