@@ -27,12 +27,18 @@ def hard_confusion(
     collar_frames: int,
     pred_labels: np.ndarray | None = None,
     gt_labels: np.ndarray | None = None,
-    enable_dummy: bool = True
+    enable_dummy: bool = False
 ) -> dict:
     """Hard event-based confusion matrix using a rectangular collar.
 
     Same call signature as `compute_event_confusion`; we just override the
     membership function to be rectangular.
+
+    ``enable_dummy`` defaults to ``False`` so the hard metric can be used as
+    a standalone pure event metric (e.g. for the rectangular-limit
+    equivalence check) without supplying frame labels. The evaluation
+    pipeline passes ``enable_dummy`` explicitly when it needs the frame-level
+    fallback to anchor the hard ROC endpoints.
     """
     # Build a degenerate MembershipParams that produces a rectangle.
     K = max(collar_frames, 1)
@@ -50,5 +56,5 @@ def hard_confusion(
         rigorous_nonspeech=True,
         pred_labels=pred_labels,
         gt_labels=gt_labels,
-        enable_dummy=enable_dummy,         # hard metrics: no virtual-detection rescue
+        enable_dummy=enable_dummy,
     )

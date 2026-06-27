@@ -231,3 +231,78 @@ def test_dummy_classifier_drives_endpoints():
     # So (TAR, FAR) = (1, 1) — the trivial "always speech" classifier.
     assert soft["TAR"] > 0.999
     assert soft["FAR"] > 0.999
+
+
+def test_dummy_does_not_overwrite_in_support_detection():
+    """Regression: the Eq.5 empty-support guard.
+
+    A real detection that lies *inside* a speech event's support but is
+    mistimed (late, sub-unity membership) must keep its genuine score. The
+    dummy fallback must NOT insert a virtual detection (score 1) on top of
+    it. Before the guard was restored this produced a spurious soft F1 ~ 1.0.
+    """
+    T = 400
+    labels = np.zeros(T, dtype=np.int64)
+    onsets = [60, 200, 320]
+    for o in onsets:
+        labels[o:o + 40] = SPEECH
+    gt = extract_ground_truth_events(labels)
+
+    p = _params()  # plateau [-5, 5]; a detection ~18 frames late is in the tail
+    # One real, late detection per event: inside support, but low membership.
+    detections = np.array([o + 18 for o in onsets], dtype=np.int64)
+    # Onset frames are correctly classified at the frame level (prob >= tau).
+    pred_labels = np.full(T, NONSPEECH, dtype=np.int64)
+    for o in onsets:
+        pred_labels[o] = SPEECH
+
+    with_dummy = compute_event_confusion(
+        detections=detections,
+        speech_events=gt["speech"],
+        nonspeech_events=gt["nonspeech"],
+        nonspeech_intervals=gt["nonspeech_intervals"],
+        speech_params=p, rigorous_nonspeech=True,
+        pred_labels=pred_labels, gt_labels=labels, enable_dummy=True,
+    )
+    no_dummy = compute_event_confusion(
+        detections=detections,
+        speech_events=gt["speech"],
+        nonspeech_events=gt["nonspeech"],
+        nonspeech_intervals=gt["nonspeech_intervals"],
+        speech_params=p, rigorous_nonspeech=True,
+        pred_labels=pred_labels, gt_labels=labels, enable_dummy=False,
+    )
+
+    # No virtual detections should be inserted (support is non-empty)...
+    assert with_dummy["n_virtual_detections"] == 0
+    # ...so the dummy must not change the score, and it must reflect the
+    # mistimed (well below 1.0) detections rather than a perfect recall.
+    np.testing.assert_allclose(with_dummy["TP"], no_dummy["TP"], atol=1e-12)
+    assert with_dummy["R"] < 0.5
+    assert with_dummy["F1"] < 0.5
+
+
+def test_dummy_still_anchors_endpoint_when_support_empty():
+    """The fallback must still fire when no real detection is in support,
+    so the ROC endpoints stay anchored (complement to the test above)."""
+    T = 200
+    labels = np.zeros(T, dtype=np.int64)
+    labels[40:80] = SPEECH
+    labels[120:160] = NONSPEECH
+    gt = extract_ground_truth_events(labels)
+
+    # No real detections at all -> support is empty for every event.
+    detections = np.array([], dtype=np.int64)
+    pred_labels = np.full(T, SPEECH, dtype=np.int64)  # tau -> 0
+    p = _params()
+
+    soft = compute_event_confusion(
+        detections=detections,
+        speech_events=gt["speech"],
+        nonspeech_events=gt["nonspeech"],
+        nonspeech_intervals=gt["nonspeech_intervals"],
+        speech_params=p, rigorous_nonspeech=True,
+        pred_labels=pred_labels, gt_labels=labels, enable_dummy=True,
+    )
+    assert soft["n_virtual_detections"] >= 1
+    assert soft["TAR"] > 0.999 and soft["FAR"] > 0.999

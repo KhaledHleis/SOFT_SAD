@@ -68,6 +68,93 @@ def infer_probs(model, loader, device) -> list[dict]:
 
 
 # ---------------------------------------------------------------------
+# Reusable setup helpers (shared by evaluate.main and datasize_eval.main)
+# ---------------------------------------------------------------------
+
+def build_membership(cfg: dict) -> tuple[MembershipParams, int]:
+    """Build the soft membership params and the hard collar (in frames)."""
+    sample_rate = int(cfg["data"]["sample_rate"])
+    hop_length  = int(cfg["features"]["hop_length"])
+    p = MembershipParams.from_ms(
+        t1_ms=float(cfg["metrics"]["t1_ms"]),
+        t2_ms=float(cfg["metrics"]["t2_ms"]),
+        t3_ms=float(cfg["metrics"]["t3_ms"]),
+        t4_ms=float(cfg["metrics"]["t4_ms"]),
+        K_ms=float(cfg["metrics"]["K_ms"]),
+        steepness=float(cfg["metrics"]["steepness"]),
+        hop_length=hop_length, sample_rate=sample_rate,
+    )
+    collar_ms = cfg["metrics"]["hard_collar_ms"]
+    if collar_ms is None:
+        collar_ms = (cfg["metrics"]["t3_ms"] - cfg["metrics"]["t2_ms"]) / 2.0
+    collar_frames = int(round(float(collar_ms) * sample_rate / hop_length / 1000.0))
+    return p, collar_frames
+
+
+def load_predictions(
+    cfg: dict,
+    checkpoint: str,
+    split: str = "test",
+    device: "torch.device | None" = None,
+) -> list[dict]:
+    """Load a checkpoint, run inference on a split, return per-utt predictions.
+
+    Factored out of ``main`` so the data-size evaluation can be run as a
+    standalone entry point without duplicating model/loader setup.
+    """
+    if device is None:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    ckpt = torch.load(checkpoint, map_location="cpu", weights_only=False)
+    input_size = int(ckpt.get("input_size", cfg["features"]["n_mfcc"]))
+    model = SADGRU(
+        input_size=input_size,
+        hidden_size=int(cfg["model"]["hidden_size"]),
+        num_layers=int(cfg["model"]["num_layers"]),
+        bidirectional=bool(cfg["model"]["bidirectional"]),
+        dropout=float(cfg["model"]["dropout"]),
+    ).to(device)
+    model.load_state_dict(ckpt["state_dict"])
+    model.eval()
+
+    feat_dir  = Path(cfg["data"]["feature_cache"])
+    data_root = Path(cfg["data"]["root"])
+    ds        = FeatureDataset(feat_dir, data_root / f"{split}.csv")
+    loader    = DataLoader(
+        ds, batch_size=int(cfg["training"]["batch_size"]),
+        shuffle=False, num_workers=int(cfg["training"]["num_workers"]),
+        collate_fn=collate_pad,
+    )
+    return infer_probs(model, loader, device)
+
+
+def roc_optimal_threshold(
+    confs_by_tau: list[dict],
+    taus: np.ndarray,
+) -> tuple[float, int, float]:
+    """Operating point on the ROC curve closest to the ideal corner (0, 1).
+
+    For each threshold we have a point ``(FAR, TAR)``; the "best" operating
+    point is the one minimising the Euclidean distance to ``(FAR=0, TAR=1)``::
+
+        dist(tau) = sqrt( FAR(tau)^2 + (1 - TAR(tau))^2 )
+
+    This is the standard closest-to-(0,1) criterion and is what the data-size
+    scaling study uses as its fixed threshold (computed once on the FULL
+    dataset). It is reported independently of the F1-maximising threshold,
+    which is a different operating point.
+
+    Returns
+    -------
+    (tau, index, distance)
+    """
+    far = np.array([c["FAR"] for c in confs_by_tau], dtype=np.float64)
+    tar = np.array([c["TAR"] for c in confs_by_tau], dtype=np.float64)
+    dist = np.sqrt(far ** 2 + (1.0 - tar) ** 2)
+    idx = int(np.argmin(dist))
+    return float(taus[idx]), idx, float(dist[idx])
+
+
+# ---------------------------------------------------------------------
 # Helpers shared by sweep() and the scaling loop
 # ---------------------------------------------------------------------
 
@@ -492,50 +579,18 @@ def main():
     args = ap.parse_args()
 
     cfg  = yaml.safe_load(open(args.config))
-    ckpt = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
-    input_size = int(ckpt.get("input_size", cfg["features"]["n_mfcc"]))
 
     out_dir = Path(args.out) if args.out else Path(args.checkpoint).parent / f"eval_{args.split}"
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model  = SADGRU(
-        input_size=input_size,
-        hidden_size=int(cfg["model"]["hidden_size"]),
-        num_layers=int(cfg["model"]["num_layers"]),
-        bidirectional=bool(cfg["model"]["bidirectional"]),
-        dropout=float(cfg["model"]["dropout"]),
-    ).to(device)
-    model.load_state_dict(ckpt["state_dict"])
-    model.eval()
-
-    feat_dir  = Path(cfg["data"]["feature_cache"])
-    data_root = Path(cfg["data"]["root"])
-    ds        = FeatureDataset(feat_dir, data_root / f"{args.split}.csv")
-    loader    = DataLoader(
-        ds, batch_size=int(cfg["training"]["batch_size"]),
-        shuffle=False, num_workers=int(cfg["training"]["num_workers"]),
-        collate_fn=collate_pad,
-    )
-    preds = infer_probs(model, loader, device)
+    preds = load_predictions(cfg, args.checkpoint, args.split)
     print(f"  inferred {len(preds)} utterances on split={args.split}")
 
-    # Membership params
-    sample_rate = int(cfg["data"]["sample_rate"])
-    hop_length  = int(cfg["features"]["hop_length"])
-    p = MembershipParams.from_ms(
-        t1_ms=float(cfg["metrics"]["t1_ms"]),
-        t2_ms=float(cfg["metrics"]["t2_ms"]),
-        t3_ms=float(cfg["metrics"]["t3_ms"]),
-        t4_ms=float(cfg["metrics"]["t4_ms"]),
-        K_ms=float(cfg["metrics"]["K_ms"]),
-        steepness=float(cfg["metrics"]["steepness"]),
-        hop_length=hop_length, sample_rate=sample_rate,
-    )
+    # Membership params + hard collar
+    p, collar_frames = build_membership(cfg)
     collar_ms = cfg["metrics"]["hard_collar_ms"]
     if collar_ms is None:
         collar_ms = (cfg["metrics"]["t3_ms"] - cfg["metrics"]["t2_ms"]) / 2.0
-    collar_frames = int(round(float(collar_ms) * sample_rate / hop_length / 1000.0))
     print(f"  soft membership: t1={p.t1} t2={p.t2} t3={p.t3} t4={p.t4} K={p.K} (frames)")
     print(f"  hard collar     : {collar_frames} frames ({collar_ms} ms)")
 
@@ -560,16 +615,26 @@ def main():
     save_per_category(per_cat, out_dir)
 
     # ----------------------------------------------------------------
-    # [NEW] Data-size scaling curve
+    # ROC-optimal operating point (closest to the ideal corner (0, 1))
+    # on the FULL dataset. This is the threshold the data-size scaling
+    # study is fixed at -- a different operating point from best-F1.
+    # ----------------------------------------------------------------
+    roc_tau, roc_idx, roc_dist = roc_optimal_threshold(swept["soft"], taus)
+    print(f"  ROC-optimal tau (closest to (0,1)) = {roc_tau:.3f}  "
+          f"(FAR={swept['soft'][roc_idx]['FAR']:.3f}, "
+          f"TAR={swept['soft'][roc_idx]['TAR']:.3f}, dist={roc_dist:.3f})")
+
+    # ----------------------------------------------------------------
+    # [NEW] Data-size scaling curve (fixed at the ROC-optimal threshold)
     # ----------------------------------------------------------------
     ds_step   = int(cfg["metrics"].get("datasize_step",   1000))
     ds_n_boot = int(cfg["metrics"].get("datasize_n_boot", 0))
     ds_seed   = int(cfg["metrics"].get("datasize_seed",   42))
 
-    print(f"  computing data-size scaling (step={ds_step}, n_boot={ds_n_boot})...")
+    print(f"  computing data-size scaling (step={ds_step}, n_boot={ds_n_boot}, tau={roc_tau:.3f})...")
     scaling_rows = sweep_by_datasize(
         preds, cfg, p, collar_frames,
-        tau=best_tau,
+        tau=roc_tau,
         step=ds_step,
         n_boot=ds_n_boot,
         seed=ds_seed,
@@ -583,6 +648,12 @@ def main():
     summary = {
         "split":         args.split,
         "best_tau":      best_tau,
+        "roc_optimal_tau": roc_tau,
+        "roc_optimal_point": {
+            "FAR":  swept["soft"][roc_idx]["FAR"],
+            "TAR":  swept["soft"][roc_idx]["TAR"],
+            "dist": roc_dist,
+        },
         "soft_at_best":  swept["soft"][best_idx],
         "hard_at_best":  swept["hard"][best_idx],
         "membership_frames": dict(
@@ -592,6 +663,7 @@ def main():
         "rigorous_nonspeech": bool(cfg["metrics"]["rigorous_nonspeech"]),
         # New: record the scaling config so results are reproducible
         "datasize_scaling": {
+            "tau":    roc_tau,
             "step":   ds_step,
             "n_boot": ds_n_boot,
             "seed":   ds_seed,

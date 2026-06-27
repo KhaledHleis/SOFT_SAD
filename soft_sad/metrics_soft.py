@@ -3,10 +3,12 @@
 Implements the event-symmetric soft confusion matrix from Eq. 3 of the
 paper, together with:
   - bipartite matching between detections and events (Sec. IV-B);
-  - the dummy-classifier fallback (Sec. IV-D) that inserts a virtual
-    detection at the event time whenever the frame-level prediction
-    agrees with the event's class but no detection landed inside the
-    membership support;
+  - the dummy-classifier fallback (Sec. IV-D, Eq. 5) that inserts a
+    virtual detection at the event time *only* when the frame-level
+    prediction agrees with the event's class AND no real detection landed
+    inside the membership support (the empty-support guard
+    `D(tau) ∩ supp(mu_e) = ∅`). This guard is what keeps the fallback from
+    masking mistimed real detections — see "Changes vs original" below;
   - the rigorous non-speech membership (Sec. IV-E) where each non-speech
     event has a rectangular membership covering its entire annotated
     extent.
@@ -37,6 +39,13 @@ and the lists of (event, attributed_detection) pairs for diagnostics.
 
 Changes vs original
 -------------------
+* The dummy-classifier fallback now enforces the empty-support guard from
+  Eq. 5: a virtual detection is inserted at an event only when no real
+  detection lies inside that event's membership support. Previously the
+  virtual detection was inserted at every event whose onset frame was
+  correctly classified, which overwrote genuine (often sub-unity) timing
+  scores with a perfect 1.0 and made soft F1 saturate near 1.0 regardless
+  of how late or spurious the model's detections were.
 * ``aggregate_confusions`` now returns a fully-populated dict (all nine
   keys: TP, FN, TN, FP, P, R, F1, TAR, FAR) even when the input list is
   empty or contains utterances with zero events, so callers in the
@@ -200,10 +209,24 @@ def compute_event_confusion(
     m_s = int(speech_events.size)
     m_n = int(nonspeech_events.size)
 
-    # ---- Dummy-classifier fallback (Sec. IV-D) ----
-    # Insert a virtual detection at each event whose frame-level prediction
-    # already matches its class label. This is independent of, and applied
-    # before, the bipartite matching.
+    # ---- Dummy-classifier fallback (Sec. IV-D, Eq. 5) ----
+    # The paper inserts a virtual detection at an event's time t_e ONLY when
+    # BOTH conditions hold:
+    #   (a) the frame-level prediction at t_e agrees with the event's class
+    #       (for non-speech this means the model fired speech there, i.e. the
+    #        "agree/disagree" sign that mirrors the Effect paragraph of IV-D);
+    #   (b) D(tau) ∩ supp(mu_e) = ∅, i.e. NO real detection falls inside the
+    #       event's membership support.
+    #
+    # Condition (b) is the "fallback" guard. The previous implementation
+    # omitted it and inserted a virtual detection (score 1) at every event
+    # whose onset frame was correctly classified -- even when a real, but
+    # mistimed (sub-unity) detection already sat inside the support. That
+    # overwrote the genuine timing score with a perfect 1.0, which is what
+    # made soft F1 saturate at ~1.0 regardless of detection quality. With the
+    # guard restored, the virtual detection only rescues events that have NO
+    # detection in support (the situation the fallback was designed for, and
+    # the one that anchors the ROC endpoints at tau->0 / tau->1).
     detections_eff = detections
     if enable_dummy:
         if pred_labels is None or gt_labels is None:
@@ -214,12 +237,32 @@ def compute_event_confusion(
         gt_labels = np.asarray(gt_labels, dtype=np.int64)
         T = pred_labels.size
 
+        # (b) does each event already have a *real* detection in its support?
+        real_best_s, _ = _best_detection_per_event(
+            detections, speech_events, speech_params
+        )
+        speech_support_has_real = real_best_s > 0.0   # (m_s,) bool
+
+        if rigorous_nonspeech:
+            ns_support_has_real = np.array(
+                [np.any((detections >= on) & (detections < off))
+                 for (on, off) in nonspeech_intervals],
+                dtype=bool,
+            ) if m_n else np.zeros(0, dtype=bool)
+        else:
+            real_best_n, _ = _best_detection_per_event(
+                detections, nonspeech_events, nonspeech_params
+            )
+            ns_support_has_real = real_best_n > 0.0
+
         virt = []
-        for e in speech_events:
-            if 0 <= e < T and pred_labels[e] == gt_labels[e]:
+        for j, e in enumerate(speech_events):
+            if (0 <= e < T and pred_labels[e] == gt_labels[e]
+                    and not speech_support_has_real[j]):
                 virt.append(int(e))
-        for e in nonspeech_events:
-            if 0 <= e < T and pred_labels[e] != gt_labels[e]:
+        for j, e in enumerate(nonspeech_events):
+            if (0 <= e < T and pred_labels[e] != gt_labels[e]
+                    and not ns_support_has_real[j]):
                 virt.append(int(e))
 
         if virt:
@@ -249,15 +292,21 @@ def compute_event_confusion(
     TP_s = float(best_s.sum())
     FN_s = float(m_s - TP_s)
 
-    tn_contrib = np.zeros(m_n, dtype=np.float64)
-    if rigorous_nonspeech:
-        tn_contrib = 1.0 - best_n_mu
-    else:
-        for j in range(m_n):
-            if arg_n[j] >= 0:
-                tn_contrib[j] = 1.0 - dsp[arg_n[j]]
-            else:
-                tn_contrib[j] = 1.0
+    # ---- TN credit (Eq. 3): 1 - mu_N(d_hat_e) for each non-speech event ----
+    # Both modes use the same rule; they differ only in how `best_n_mu` is
+    # built upstream: rigorous mode uses the rectangular indicator of the
+    # event's labelled extent, the symmetric-soft mode uses the soft mu_N.
+    # best_n_mu == 0 when no detection lies in support (arg_n == -1), giving
+    # full TN credit for a correctly-rejected event.
+    #
+    # NOTE: a previous version scored the non-rigorous case as 1 - dsp[arg_n]
+    # (the *speech* membership of the non-speech-matched detection). Because a
+    # detection aligned to a non-speech onset is by construction far from any
+    # speech onset, dsp ~ 0 there, so TN was credited ~fully for every
+    # non-speech event regardless of whether the model actually fired inside
+    # it. That collapsed FAR to ~0 and pinned the soft ROC to a vertical line
+    # at FAR = 0 whenever rigorous mode was off.
+    tn_contrib = 1.0 - best_n_mu
     TN_s = float(tn_contrib.sum())
     FP_s = float(m_n - TN_s)
 
@@ -312,7 +361,9 @@ def aggregate_confusions(confs: list[dict]) -> dict:
     eps = 1e-12
     P  = TP / max(TP + FP, eps)
     R  = TP / max(TP + FN, eps)
-    F1 = 2 * P * R / max(P + R, eps)
+    # F1 = 2 * P * R / max(P + R, eps)
+    F1 = ((TP*TN)-(FP*FN)) / np.sqrt((TP+FP)*(TP+FN)*(TN+FP)*(TN+FN) + eps)  # MCC, more stable when TP or TN is small
+    # print(f"Aggregated confusion: TP={TP:.1f}, FN={FN:.1f}, TN={TN:.1f}, FP={FP:.1f}, P={P:.3f}, R={R:.3f}, F1={F1:.3f}")
     return dict(
         TP=TP, FN=FN, TN=TN, FP=FP,
         P=P, R=R, F1=F1,
