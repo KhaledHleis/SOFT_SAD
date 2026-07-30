@@ -75,3 +75,6 @@ All hyper-parameters live in `config.yaml`.
 | `soft_sad/train.py`     | training CLI |
 | `soft_sad/evaluate.py`  | evaluation + plots CLI |
 | `tests/`                | sanity tests including the limiting-case equivalence with hard metrics |
+
+## Disclamer
+LLMs have been used in some parts to generate documentation, function descriptions, and helper functions.
